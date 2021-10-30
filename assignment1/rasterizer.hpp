@@ -6,7 +6,7 @@
 
 #include "Triangle.hpp"
 #include <algorithm>
-#include <eigen3/Eigen/Eigen>
+#include <Eigen3/Eigen>
 using namespace Eigen;
 
 namespace rst {
