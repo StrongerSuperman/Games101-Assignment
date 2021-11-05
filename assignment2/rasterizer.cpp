@@ -177,11 +177,16 @@ void rst::rasterizer::rasterize_triangle(const Triangle& t) {
         {
             if (!insideTriangle(x, y, t.v))
                 continue;
-             auto [alpha, beta, gamma] = computeBarycentric2D(x, y, t.v);
-             float w_reciprocal = 1.0 / (alpha / v[0].w() + beta / v[1].w() + gamma / v[2].w());
-             float z_interpolated = alpha * v[0].z() / v[0].w() + beta * v[1].z() / v[1].w() + gamma * v[2].z() / v[2].w();
-             z_interpolated *= w_reciprocal;
-             set_pixel(Eigen::Vector3f(x, y, z_interpolated), t.getColor());
+            auto [alpha, beta, gamma] = computeBarycentric2D(x, y, t.v);
+            float w_reciprocal = 1.0 / (alpha / v[0].w() + beta / v[1].w() + gamma / v[2].w());
+            float z_interpolated = alpha * v[0].z() / v[0].w() + beta * v[1].z() / v[1].w() + gamma * v[2].z() / v[2].w();
+            z_interpolated *= w_reciprocal;
+            auto ind = (height-1-y)*width + x;
+            // early-z
+            if(z_interpolated < depth_buf[ind])
+            {
+                set_pixel(Eigen::Vector3f(x, y, z_interpolated), t.getColor());
+            }
         }
     }
 }
@@ -226,11 +231,9 @@ int rst::rasterizer::get_index(int x, int y)
 
 void rst::rasterizer::set_pixel(const Eigen::Vector3f& point, const Eigen::Vector3f& color)
 {
-    //old index: auto ind = point.y() + point.x() * width;
     auto ind = (height-1-point.y())*width + point.x();
     frame_buf[ind] = color;
     depth_buf[ind] = point.z();
-
 }
 
 // clang-format on

@@ -240,47 +240,101 @@ void rst::rasterizer::draw(std::vector<Triangle *> &TriangleList) {
     }
 }
 
-static Eigen::Vector3f interpolate(float alpha, float beta, float gamma, const Eigen::Vector3f& vert1, const Eigen::Vector3f& vert2, const Eigen::Vector3f& vert3, float weight)
+static Eigen::Vector3f interpolate3(float weight[3], float recip_w[3], const Eigen::Vector3f& v1, const Eigen::Vector3f& v2, const Eigen::Vector3f& v3)
 {
-    return (alpha * vert1 + beta * vert2 + gamma * vert3) / weight;
+    float weight0 = weight[0] * recip_w[0];
+    float weight1 = weight[1] * recip_w[1];
+    float weight2 = weight[2] * recip_w[2];
+    float normalizer = 1.0f / (weight0 + weight1 + weight2);
+    float v_x = v1.x() * weight0 + v2.x() * weight1 + v3.x() * weight2;
+    float v_y = v1.y() * weight0 + v2.y() * weight1 + v3.y() * weight2;
+    float v_z = v1.z() * weight0 + v2.z() * weight1 + v3.z() * weight2;
+    return Eigen::Vector3f(v_x, v_y, v_z) * normalizer;
 }
 
-static Eigen::Vector2f interpolate(float alpha, float beta, float gamma, const Eigen::Vector2f& vert1, const Eigen::Vector2f& vert2, const Eigen::Vector2f& vert3, float weight)
+static Eigen::Vector2f interpolate2(float weight[3], float recip_w[3], const Eigen::Vector2f& v1, const Eigen::Vector2f& v2, const Eigen::Vector2f& v3)
 {
-    auto u = (alpha * vert1[0] + beta * vert2[0] + gamma * vert3[0]);
-    auto v = (alpha * vert1[1] + beta * vert2[1] + gamma * vert3[1]);
+    float weight0 = weight[0] * recip_w[0];
+    float weight1 = weight[1] * recip_w[1];
+    float weight2 = weight[2] * recip_w[2];
+    float normalizer = 1.0f / (weight0 + weight1 + weight2);
+    float v_x = v1.x() * weight0 + v2.x() * weight1 + v3.x() * weight2;
+    float v_y = v1.y() * weight0 + v2.y() * weight1 + v3.y() * weight2;
+    return Eigen::Vector2f(v_x, v_y) * normalizer;
+}
 
-    u /= weight;
-    v /= weight;
+static float interpolate1(float weight[3], float recip_w[3], float v1, float v2, float v3)
+{
+    float weight0 = weight[0] * recip_w[0];
+    float weight1 = weight[1] * recip_w[1];
+    float weight2 = weight[2] * recip_w[2];
+    float normalizer = 1.0f / (weight0 + weight1 + weight2);
+    float v = v1 * weight0 + v2 * weight1 + v3 * weight2;
+    return v * normalizer;
+}
 
-    return Eigen::Vector2f(u, v);
+static void clamp2(Eigen::Vector2f& v1)
+{
+    auto clamp = [](float& v) {
+        v = v < 0 ? 0 : v;
+        v = v > 1 ? 1 : v;
+    };
+    clamp(v1.x());
+    clamp(v1.y());
 }
 
 //Screen space rasterization
 void rst::rasterizer::rasterize_triangle(const Triangle& t, const std::array<Eigen::Vector3f, 3>& view_pos) 
 {
-    // TODO: From your HW3, get the triangle rasterization code.
-    // TODO: Inside your rasterization loop:
-    //    * v[i].w() is the vertex view space depth value z.
-    //    * Z is interpolated view space depth for the current pixel
-    //    * zp is depth between zNear and zFar, used for z-buffer
+    auto v = t.toVector4();
 
-    // float Z = 1.0 / (alpha / v[0].w() + beta / v[1].w() + gamma / v[2].w());
-    // float zp = alpha * v[0].z() / v[0].w() + beta * v[1].z() / v[1].w() + gamma * v[2].z() / v[2].w();
-    // zp *= Z;
-
-    // TODO: Interpolate the attributes:
-    // auto interpolated_color
-    // auto interpolated_normal
-    // auto interpolated_texcoords
-    // auto interpolated_shadingcoords
-
-    // Use: fragment_shader_payload payload( interpolated_color, interpolated_normal.normalized(), interpolated_texcoords, texture ? &*texture : nullptr);
-    // Use: payload.view_pos = interpolated_shadingcoords;
-    // Use: Instead of passing the triangle's color directly to the frame buffer, pass the color to the shaders first to get the final color;
-    // Use: auto pixel_color = fragment_shader(payload);
-
- 
+    auto find_bbox = [&v]()->std::tuple<float, float, float, float> {
+        float max_x = v[0].x();
+        float min_x = v[0].x();
+        float max_y = v[0].y();
+        float min_y = v[0].y();
+        for (int i = 1; i < 3; i++) {
+            float& x = v[i].x();
+            float& y = v[i].y();
+            if (x > max_x) { max_x = x; }
+            else if (x < min_x) { min_x = x; }
+            if (y > max_y) { max_y = y; }
+            else if (y < min_y) { min_y = y; }
+        }
+        return { max_x, min_x, max_y, min_y };
+    };
+    auto [bb_x_max, bb_x_min, bb_y_max, bb_y_min] = find_bbox();
+    for (int y = bb_y_min; y <= bb_y_max; y++)
+    {
+        for (int x = bb_x_min; x <= bb_x_max; x++)
+        {
+            if (!insideTriangle(x, y, t.v))
+                continue;
+            auto [alpha, beta, gamma] = computeBarycentric2D(x, y, t.v);
+            float weight[3] = { alpha, beta, gamma };
+            float recip_w[3] = { 1.0 / t.v[0].w(), 1.0 / t.v[1].w(), 1.0 / t.v[2].w() };
+            float z_interpolated = interpolate1(weight, recip_w, v[0].z(), v[1].z(), v[2].z());
+            auto ind = (height-1-y)*width + x;
+            // early-z
+            if(z_interpolated < depth_buf[ind])
+            {
+                auto interpolated_color = interpolate3(weight, recip_w, t.color[0], t.color[1], t.color[2]);
+                auto interpolated_normal = interpolate3(weight, recip_w, t.normal[0], t.normal[1], t.normal[2]);
+                auto interpolated_texcoords = interpolate2(weight, recip_w, t.tex_coords[0], t.tex_coords[1], t.tex_coords[2]);
+                clamp2(interpolated_texcoords);
+                fragment_shader_payload payload(
+                    interpolated_color,
+                    interpolated_normal.normalized(),
+                    interpolated_texcoords,
+                    texture ? &*texture : nullptr
+                );
+                payload.view_pos = interpolate3(weight, recip_w, view_pos[0], view_pos[1], view_pos[2]);
+                auto pixel_color = fragment_shader(payload);
+                set_pixel(Eigen::Vector2i(x, y), pixel_color);
+                depth_buf[ind] = z_interpolated;
+            }
+        }
+    }
 }
 
 void rst::rasterizer::set_model(const Eigen::Matrix4f& m)
@@ -326,7 +380,7 @@ int rst::rasterizer::get_index(int x, int y)
 void rst::rasterizer::set_pixel(const Vector2i &point, const Eigen::Vector3f &color)
 {
     //old index: auto ind = point.y() + point.x() * width;
-    int ind = (height-point.y())*width + point.x();
+    int ind = (height-1-point.y())*width + point.x();
     frame_buf[ind] = color;
 }
 
